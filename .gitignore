@@ -2,3 +2,7 @@
 
 # pyenv local environment
 .python-version
+
+# build systems
+dist/
+*.egg-info/
