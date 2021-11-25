@@ -8,3 +8,5 @@ COPY setup.cfg setup.cfg
 COPY pyproject.toml pyproject.toml
 COPY src/ src/
 RUN pip install -e .
+
+COPY key.secret key.secret

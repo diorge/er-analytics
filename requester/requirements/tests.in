@@ -6,3 +6,5 @@ mypy
 pytest >= 6.0
 pytest-cov
 pytest-pspec
+requests-mock
+types-requests
