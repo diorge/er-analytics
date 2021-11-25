@@ -1,5 +1,0 @@
--r tests.in
-
-build
-pip-compile-multi
-setuptools

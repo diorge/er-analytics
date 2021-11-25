@@ -1,7 +1,0 @@
-FROM er-requester AS er-test
-
-WORKDIR /requester
-COPY requirements/tests.txt requirements/tests.txt
-RUN pip install -r requirements/tests.txt
-
-CMD pytest
