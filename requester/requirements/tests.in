@@ -1,0 +1,7 @@
+-r service.in
+
+black
+mypy
+pytest
+pytest-cov
+pytest-pspec
