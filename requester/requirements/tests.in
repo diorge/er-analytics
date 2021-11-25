@@ -1,7 +1,8 @@
 -r service.in
 
 black
+isort
 mypy
-pytest
+pytest >= 6.0
 pytest-cov
 pytest-pspec

@@ -6,3 +6,13 @@
 # build systems
 dist/
 *.egg-info/
+
+# python internals
+__pycache__/
+
+# vscode
+.vscode/
+
+# test results
+.coverage
+.pytest_cache/
