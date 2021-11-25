@@ -1,7 +1,7 @@
 # requester package
 
 The requester package is responsible for downloading
-data from the API, and storing it's raw form.
+data from the API, and storing its raw form.
 
 This package has to deal with rate limiting,
 game ID generation, and overall provide
