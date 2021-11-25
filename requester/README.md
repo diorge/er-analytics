@@ -10,4 +10,7 @@ robustness to the data found (no duplicates, no missing, and so on).
 ## Environment
 
 Use a virtual environment for Python 3.10 (`pyenv` recommended) and `pip install -r requirements/dev.txt`.
-Docker container alternative coming soon.
+
+Alternatively, a complete Docker environment is provided.
+Running `make` or `make build` will create two images, `er-requester` and `er-test`.
+Running `make test` will run the test suite.
