@@ -1,11 +1,34 @@
 import itertools
 import time
+import typing
 
+import pytest
 import requests_mock
 
 import requester.download as dwn
 
 SAMPLE_GAME_ID = dwn.GameID(13594270)
+
+PatchDownloader = typing.Callable[..., typing.Iterable[dwn.DownloadedGame]]
+
+
+@pytest.fixture
+def unlimited_download_patch() -> PatchDownloader:
+    def inner(
+        starting_game_id: dwn.GameID,
+        *,
+        on_error_policy: dwn.OnErrorPolicy = dwn.raise_on_error_policy,
+        is_id_valid: typing.Callable[[dwn.GameID], bool] = (lambda _: True),
+    ) -> typing.Iterable[dwn.DownloadedGame]:
+        return dwn.download_patch(
+            starting_game_id,
+            retry_time_in_seconds=(0,),
+            on_error_policy=on_error_policy,
+            is_id_valid=is_id_valid,
+            downloader=dwn._download_game_unlimited,
+        )
+
+    return inner
 
 
 def test_limit_by_clock() -> None:
@@ -18,7 +41,7 @@ def test_limit_by_clock() -> None:
         m.get("https://open-api.bser.io/v1/games/0", json={"code": 200})
 
         for _ in range(CALLS_TO_MAKE):
-            dwn.get_game_data(dwn.GameID(0))
+            dwn.download_game(dwn.GameID(0))
 
     end = time.time()
 
@@ -31,7 +54,7 @@ def test_user_games_retrieved() -> None:
     # NOTE: avoid having more tests hitting the official API;
     # this one and `test_api_key_invalid` are enough.
     # use mocks instead
-    response = dwn.get_game_data(SAMPLE_GAME_ID)
+    response = dwn.download_game(SAMPLE_GAME_ID)
     assert 200 == response.status_code
     players_stats = response.json()["userGames"]
     assert 18 == len(players_stats)
@@ -40,11 +63,11 @@ def test_user_games_retrieved() -> None:
 def test_api_key_invalid() -> None:
     """The API requires a valid key."""
     # just a check we're actually hitting the official API with our token
-    response = dwn.get_game_data(SAMPLE_GAME_ID, api_token="SomeInvalidToken")
+    response = dwn.download_game(SAMPLE_GAME_ID, api_token="SomeInvalidToken")
     assert response.status_code == 403
 
 
-def test_download_entire_patch() -> None:
+def test_download_entire_patch(unlimited_download_patch: PatchDownloader) -> None:
     """Is able to download all games of a patch, not touching other patches."""
     fine_json = {"code": 200, "userGames": [{"versionMajor": 45, "versionMinor": 0}]}
     old_json = {"code": 200, "userGames": [{"versionMajor": 44, "versionMinor": 0}]}
@@ -58,7 +81,9 @@ def test_download_entire_patch() -> None:
 
         gen = []
         try:
-            for game in dwn.download_patch(dwn.GameID(11), retry_time_in_seconds=(0,)):
+            for game in unlimited_download_patch(
+                dwn.GameID(11),
+            ):
                 gen.append(game)
         except dwn.TooManyTriesError:
             pass
@@ -66,7 +91,7 @@ def test_download_entire_patch() -> None:
         assert 3 == len(gen)
 
 
-def test_download_stops_next_patch() -> None:
+def test_download_stops_next_patch(unlimited_download_patch: PatchDownloader) -> None:
     """Downloading the patch stops if the next game is next patch."""
     fine_json = {"code": 200, "userGames": [{"versionMajor": 45, "versionMinor": 0}]}
     old_json = {"code": 200, "userGames": [{"versionMajor": 44, "versionMinor": 0}]}
@@ -80,7 +105,7 @@ def test_download_stops_next_patch() -> None:
 
         gen = []
         try:
-            for game in dwn.download_patch(dwn.GameID(11), retry_time_in_seconds=(0,)):
+            for game in unlimited_download_patch(dwn.GameID(11)):
                 gen.append(game)
         except dwn.TooManyTriesError:
             pass
@@ -88,7 +113,7 @@ def test_download_stops_next_patch() -> None:
         assert 3 == len(gen)
 
 
-def test_skip_policy() -> None:
+def test_skip_policy(unlimited_download_patch: PatchDownloader) -> None:
     """Skip policy will jump over an unretrievable game."""
     fine_json = {"code": 200, "userGames": [{"versionMajor": 45, "versionMinor": 0}]}
     old_json = {"code": 200, "userGames": [{"versionMajor": 44, "versionMinor": 0}]}
@@ -100,16 +125,15 @@ def test_skip_policy() -> None:
         m.get("https://open-api.bser.io/v1/games/12", json=fine_json | {"id": 12})
         m.get("https://open-api.bser.io/v1/games/13", json=fine_json | {"id": 13})
 
-        gen = dwn.download_patch(
+        gen = unlimited_download_patch(
             dwn.GameID(10),
-            retry_time_in_seconds=(0,),
             on_error_policy=dwn.skip_on_error_policy,
         )
         games = itertools.islice(gen, 3)
         assert {10, 12, 13} == {g.data["id"] for g in games}
 
 
-def test_filter_download_predicate() -> None:
+def test_filter_download_predicate(unlimited_download_patch: PatchDownloader) -> None:
     """Can filter out certain game IDs."""
     fine_json = {"code": 200, "userGames": [{"versionMajor": 45, "versionMinor": 0}]}
     old_json = {"code": 200, "userGames": [{"versionMajor": 44, "versionMinor": 0}]}
@@ -120,16 +144,15 @@ def test_filter_download_predicate() -> None:
         m.get("https://open-api.bser.io/v1/games/12", json=fine_json | {"id": 12})
         m.get("https://open-api.bser.io/v1/games/13", json=fine_json | {"id": 13})
 
-        gen = dwn.download_patch(
+        gen = unlimited_download_patch(
             dwn.GameID(10),
-            retry_time_in_seconds=(0,),
             is_id_valid=(lambda gid: gid != 11),
         )
         games = itertools.islice(gen, 3)
         assert {10, 12, 13} == {g.data["id"] for g in games}
 
 
-def test_download_invalid_patch() -> None:
+def test_download_invalid_patch(unlimited_download_patch: PatchDownloader) -> None:
     """Stops at an invalid patch."""
     fine_json = {"code": 200, "userGames": [{"versionMajor": 45, "versionMinor": 0}]}
     invalid_patch = {"code": 200, "userGames": [{}]}
@@ -141,6 +164,6 @@ def test_download_invalid_patch() -> None:
             "https://open-api.bser.io/v1/games/11", json=invalid_userGames | {"id": 11}
         )
 
-        gen = dwn.download_patch(dwn.GameID(10), retry_time_in_seconds=(0,))
+        gen = unlimited_download_patch(dwn.GameID(10))
 
         assert {10} == {g.data["id"] for g in tuple(gen)}

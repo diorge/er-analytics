@@ -28,6 +28,7 @@ class FailedDownloadAttempt:
 
 
 OnErrorPolicy = typing.Callable[[FailedDownloadAttempt], None]
+Downloader = typing.Callable[..., requests.Response]
 
 
 class TooManyTriesError(Exception):
@@ -60,13 +61,26 @@ def get_patch(
 
 @ratelimit.sleep_and_retry
 @ratelimit.limits(calls=CALLS_PER_SECOND, period=1)
-def get_game_data(
+def download_game(
     game_id: GameID,
     api_token: typing.Optional[str] = None,
     url: str = "https://open-api.bser.io/v1/games",
 ) -> requests.Response:
-    """Download all the data of a single match."""
+    """
+    Downloads the data of a given match, bounded by the API call request limit.
+    """
+    return _download_game_unlimited(game_id, api_token, url)
 
+
+def _download_game_unlimited(
+    game_id: GameID,
+    api_token: typing.Optional[str] = None,
+    url: str = "https://open-api.bser.io/v1/games",
+) -> requests.Response:
+    """
+    Downloads the data of a given match, IGNORING API call request limit.
+    Only use in the test suite!
+    """
     if api_token is None:
         with open("key.secret", "r") as f:
             api_token = f.read()
@@ -86,6 +100,7 @@ def download_patch(
     retry_time_in_seconds: typing.Tuple[float, ...] = DEFAULT_RETRY_ATTEMPTS,
     on_error_policy: OnErrorPolicy = raise_on_error_policy,
     is_id_valid: typing.Callable[[GameID], bool] = (lambda _: True),
+    downloader: Downloader = download_game,
 ) -> typing.Iterable[DownloadedGame]:
     """
     Downloads game matches from the patch of the given Game ID.
@@ -95,12 +110,14 @@ def download_patch(
     not stepping boundaries into the next patch.
     """
 
-    starting_game = get_game_data(starting_game_id)
+    starting_game = downloader(starting_game_id)
     yield DownloadedGame(starting_game_id, starting_game.json(), starting_game.content)
 
     target_patch = get_patch(starting_game.json())
 
-    def download_from(game_id_seq):
+    def download_from(
+        game_id_seq: typing.Iterator[GameID],
+    ) -> typing.Iterable[DownloadedGame]:
         current_patch = target_patch
 
         while current_patch == target_patch:
@@ -117,7 +134,7 @@ def download_patch(
             successful = False
             while not successful and attempt < len(retry_time_in_seconds):
                 time.sleep(retry_time_in_seconds[attempt])
-                next_game = get_game_data(GameID(next_id))
+                next_game = downloader(GameID(next_id))
                 successful = (
                     next_game.status_code == 200 and next_game.json()["code"] == 200
                 )
@@ -136,5 +153,8 @@ def download_patch(
                 )
                 on_error_policy(FailedDownloadAttempt(next_id, attempt, next_game))
 
-    yield from download_from(itertools.count(start=starting_game_id - 1, step=-1))
-    yield from download_from(itertools.count(start=starting_game_id + 1))
+    backwards_ids = map(GameID, itertools.count(start=starting_game_id - 1, step=-1))
+    yield from download_from(backwards_ids)
+
+    forward_ids = map(GameID, itertools.count(start=starting_game_id + 1))
+    yield from download_from(forward_ids)
