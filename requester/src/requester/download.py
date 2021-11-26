@@ -13,7 +13,7 @@ CALLS_PER_SECOND = 1
 DEFAULT_RETRY_ATTEMPTS = (0, 1, 2, 5, 10, 30)
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(frozen=True)
 class FailedDownloadAttempt:
     game_id: GameID
     attempt_number: int
