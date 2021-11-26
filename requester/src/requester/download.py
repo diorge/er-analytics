@@ -1,3 +1,4 @@
+import dataclasses
 import itertools
 import time
 import typing
@@ -43,9 +44,6 @@ def get_patch(game_data: typing.Dict[str, typing.Any]) -> typing.Tuple[str, str]
     patch_version = first_player["versionMajor"]
     hotfix_version = first_player["versionMinor"]
     return (patch_version, hotfix_version)
-
-
-import dataclasses
 
 
 @dataclasses.dataclass
