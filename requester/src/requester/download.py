@@ -9,12 +9,32 @@ from loguru import logger
 
 GameID = typing.NewType("GameID", int)
 
-CALLS_PER_SECOND: int = 1
+CALLS_PER_SECOND = 1
 DEFAULT_RETRY_ATTEMPTS = (0, 1, 2, 5, 10, 30)
 
 
+@dataclasses.dataclass
+class FailedDownloadAttempt:
+    game_id: GameID
+    attempt_number: int
+    last_response: requests.Response
+
+
+OnErrorPolicy = typing.Callable[[FailedDownloadAttempt], None]
+
+
 class TooManyTriesError(Exception):
-    pass
+    def __init__(self, details: FailedDownloadAttempt) -> None:
+        self.details = details
+        super().__init__()
+
+
+def raise_on_error_policy(attempt: FailedDownloadAttempt) -> None:
+    raise TooManyTriesError(attempt)
+
+
+def skip_on_error_policy(attempt: FailedDownloadAttempt) -> None:
+    logger.warning(f"Skipping download of game_id=<{attempt.game_id}>")
 
 
 @ratelimit.sleep_and_retry
@@ -39,11 +59,15 @@ def get_game_data(
     return response
 
 
-def get_patch(game_data: typing.Dict[str, typing.Any]) -> typing.Tuple[str, str]:
-    first_player = game_data["userGames"][0]
-    patch_version = first_player["versionMajor"]
-    hotfix_version = first_player["versionMinor"]
-    return (patch_version, hotfix_version)
+def get_patch(
+    game_data: typing.Dict[str, typing.Any]
+) -> typing.Optional[typing.Tuple[str, str]]:
+    first_player = game_data.get("userGames", [{}])[0]
+    patch_version = first_player.get("versionMajor")
+    hotfix_version = first_player.get("versionMinor")
+    if patch_version is not None and hotfix_version is not None:
+        return (patch_version, hotfix_version)
+    return None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -56,6 +80,7 @@ class DownloadedGame:
 def download_patch(
     starting_game_id: GameID,
     retry_time_in_seconds: typing.Tuple[float, ...] = DEFAULT_RETRY_ATTEMPTS,
+    on_error_policy: OnErrorPolicy = raise_on_error_policy,
 ) -> typing.Iterable[DownloadedGame]:
     """
     Downloads game matches from the patch of the given Game ID.
@@ -85,14 +110,19 @@ def download_patch(
                     next_game.status_code == 200 and next_game.json()["code"] == 200
                 )
                 attempt += 1
-            if not successful:
-                raise TooManyTriesError(
-                    f"Maximum attempts at retrieving game data for game_id=<{next_id}>"
-                )
 
-            current_patch = get_patch(next_game.json())
-            if current_patch == target_patch:
-                yield DownloadedGame(next_id, next_game.json(), next_game.content)
+            if successful:
+                current_patch = get_patch(next_game.json())
+                if current_patch is None:
+                    logger.warning(f"Unable to retrieve patch for game_id=<{next_id}>")
+                elif current_patch == target_patch:
+                    yield DownloadedGame(next_id, next_game.json(), next_game.content)
+            else:
+                logger.info(
+                    f"Reached maximum attempts=<{attempt}"
+                    f" for downloading game_id=<{next_id}>"
+                )
+                on_error_policy(FailedDownloadAttempt(next_id, attempt, next_game))
 
     yield from download_from(itertools.count(start=starting_game_id - 1, step=-1))
     yield from download_from(itertools.count(start=starting_game_id + 1))

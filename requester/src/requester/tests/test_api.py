@@ -1,3 +1,4 @@
+import itertools
 import time
 
 import requests_mock
@@ -85,3 +86,24 @@ def test_download_stops_next_patch() -> None:
             pass
 
         assert 3 == len(gen)
+
+
+def test_skip_policy() -> None:
+    """Skip policy will jump over an unretrievable game."""
+    fine_json = {"code": 200, "userGames": [{"versionMajor": 45, "versionMinor": 0}]}
+    old_json = {"code": 200, "userGames": [{"versionMajor": 44, "versionMinor": 0}]}
+    fail_json = {"code": 404}
+    with requests_mock.Mocker() as m:
+        m.get("https://open-api.bser.io/v1/games/9", json=old_json | {"id": 9})
+        m.get("https://open-api.bser.io/v1/games/10", json=fine_json | {"id": 10})
+        m.get("https://open-api.bser.io/v1/games/11", json=fail_json | {"id": 11})
+        m.get("https://open-api.bser.io/v1/games/12", json=fine_json | {"id": 12})
+        m.get("https://open-api.bser.io/v1/games/13", json=fine_json | {"id": 13})
+
+        gen = dwn.download_patch(
+            dwn.GameID(10),
+            retry_time_in_seconds=(0,),
+            on_error_policy=dwn.skip_on_error_policy,
+        )
+        games = itertools.islice(gen, 3)
+        assert {10, 12, 13} == {g.data["id"] for g in games}
