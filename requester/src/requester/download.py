@@ -1,6 +1,6 @@
 import itertools
-import typing
 import time
+import typing
 
 import ratelimit
 import requests
@@ -38,10 +38,27 @@ def get_game_data(
     return response
 
 
+def get_patch(game_data: typing.Dict[str, typing.Any]) -> typing.Tuple[str, str]:
+    first_player = game_data["userGames"][0]
+    patch_version = first_player["versionMajor"]
+    hotfix_version = first_player["versionMinor"]
+    return (patch_version, hotfix_version)
+
+
+import dataclasses
+
+
+@dataclasses.dataclass
+class DownloadedGame:
+    game_id: GameID
+    data: typing.Dict[str, typing.Any]
+    raw: bytes
+
+
 def download_patch(
     starting_game_id: GameID,
     retry_time_in_seconds: typing.Tuple[float, ...] = DEFAULT_RETRY_ATTEMPTS,
-) -> typing.Iterable[requests.Response]:
+) -> typing.Iterable[DownloadedGame]:
     """
     Downloads game matches from the patch of the given Game ID.
     Will keep downloading at time intervals upon reaching 404 (or any error),
@@ -50,14 +67,8 @@ def download_patch(
     not stepping boundaries into the next patch.
     """
 
-    def get_patch(game_data) -> typing.Tuple[str, str]:
-        first_player = game_data["userGames"][0]
-        patch_version = first_player["versionMajor"]
-        hotfix_version = first_player["versionMinor"]
-        return (patch_version, hotfix_version)
-
-    starting_game = get_game_data(GameID(starting_game_id))
-    yield starting_game
+    starting_game = get_game_data(starting_game_id)
+    yield DownloadedGame(starting_game_id, starting_game.json(), starting_game.content)
 
     target_patch = get_patch(starting_game.json())
 
@@ -83,7 +94,7 @@ def download_patch(
 
             current_patch = get_patch(next_game.json())
             if current_patch == target_patch:
-                yield next_game
+                yield DownloadedGame(next_id, next_game.json(), next_game.content)
 
     yield from download_from(itertools.count(start=starting_game_id - 1, step=-1))
     yield from download_from(itertools.count(start=starting_game_id + 1))

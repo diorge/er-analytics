@@ -1,4 +1,5 @@
 *.secret
+data/
 
 # pyenv local environment
 .python-version
