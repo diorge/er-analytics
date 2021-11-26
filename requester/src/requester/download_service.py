@@ -1,4 +1,5 @@
 import dataclasses
+import enum
 import os
 import pathlib
 import typing
@@ -10,11 +11,23 @@ import requester.download as dwn
 DEFAULT_TARGET_DIR = pathlib.Path("data") / "games" / "raw"
 
 
+class RetryProfile(enum.Enum):
+    STANDARD = enum.auto()
+    AGGRESSIVE = enum.auto()
+
+    def retry_timers(self) -> typing.Tuple[float, ...]:
+        return {
+            RetryProfile.STANDARD: dwn.DEFAULT_RETRY_ATTEMPTS,
+            RetryProfile.AGGRESSIVE: (1, 2, 5),
+        }[self]
+
+
 @dataclasses.dataclass(frozen=True)
 class Parameters:
     starting_game_id: dwn.GameID
     overwrite_found_files: bool
     target_directory: pathlib.Path
+    profile: RetryProfile
 
 
 def parse_env() -> Parameters:
@@ -31,7 +44,13 @@ def parse_env() -> Parameters:
 
     target_dir = pathlib.Path(os.getenv("TARGET_DIRECTORY", DEFAULT_TARGET_DIR))
 
-    return Parameters(starting_game_id, overwrite_found_files, target_dir)
+    profile_name = os.getenv("RETRY_PROFILE", "STANDARD").upper()
+    try:
+        profile = RetryProfile[profile_name]
+    except KeyError:
+        profile = RetryProfile.STANDARD
+
+    return Parameters(starting_game_id, overwrite_found_files, target_dir, profile)
 
 
 def get_filename(
@@ -69,6 +88,7 @@ def main() -> None:
 
     game_seq = dwn.download_patch(
         params.starting_game_id,
+        retry_time_in_seconds=params.profile.retry_timers(),
         on_error_policy=dwn.skip_on_error_policy,
         is_id_valid=game_filter(params),
     )
