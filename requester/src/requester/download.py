@@ -34,7 +34,10 @@ def raise_on_error_policy(attempt: FailedDownloadAttempt) -> None:
 
 
 def skip_on_error_policy(attempt: FailedDownloadAttempt) -> None:
-    logger.warning(f"Skipping download of game_id=<{attempt.game_id}>")
+    logger.warning(
+        f"Skipping download of game_id=<{attempt.game_id}>"
+        ", reason=<Skip on error policy>"
+    )
 
 
 @ratelimit.sleep_and_retry
@@ -79,8 +82,10 @@ class DownloadedGame:
 
 def download_patch(
     starting_game_id: GameID,
+    *,
     retry_time_in_seconds: typing.Tuple[float, ...] = DEFAULT_RETRY_ATTEMPTS,
     on_error_policy: OnErrorPolicy = raise_on_error_policy,
+    is_id_valid: typing.Callable[[GameID], bool] = (lambda _: True),
 ) -> typing.Iterable[DownloadedGame]:
     """
     Downloads game matches from the patch of the given Game ID.
@@ -101,6 +106,13 @@ def download_patch(
         while current_patch == target_patch:
             next_id = next(game_id_seq)
 
+            if not is_id_valid(next_id):
+                logger.info(
+                    f"Skipping download of game_id=<{next_id}>"
+                    ", reason=<Predicate filtered>"
+                )
+                continue
+
             attempt = 0
             successful = False
             while not successful and attempt < len(retry_time_in_seconds):
@@ -119,7 +131,7 @@ def download_patch(
                     yield DownloadedGame(next_id, next_game.json(), next_game.content)
             else:
                 logger.info(
-                    f"Reached maximum attempts=<{attempt}"
+                    f"Reached maximum attempts=<{attempt}>"
                     f" for downloading game_id=<{next_id}>"
                 )
                 on_error_policy(FailedDownloadAttempt(next_id, attempt, next_game))

@@ -107,3 +107,23 @@ def test_skip_policy() -> None:
         )
         games = itertools.islice(gen, 3)
         assert {10, 12, 13} == {g.data["id"] for g in games}
+
+
+def test_filter_download_predicate() -> None:
+    """Can filter out certain game IDs."""
+    fine_json = {"code": 200, "userGames": [{"versionMajor": 45, "versionMinor": 0}]}
+    old_json = {"code": 200, "userGames": [{"versionMajor": 44, "versionMinor": 0}]}
+    with requests_mock.Mocker() as m:
+        m.get("https://open-api.bser.io/v1/games/9", json=old_json | {"id": 9})
+        m.get("https://open-api.bser.io/v1/games/10", json=fine_json | {"id": 10})
+        m.get("https://open-api.bser.io/v1/games/11", json=fine_json | {"id": 11})
+        m.get("https://open-api.bser.io/v1/games/12", json=fine_json | {"id": 12})
+        m.get("https://open-api.bser.io/v1/games/13", json=fine_json | {"id": 13})
+
+        gen = dwn.download_patch(
+            dwn.GameID(10),
+            retry_time_in_seconds=(0,),
+            is_id_valid=(lambda gid: gid != 11),
+        )
+        games = itertools.islice(gen, 3)
+        assert {10, 12, 13} == {g.data["id"] for g in games}
