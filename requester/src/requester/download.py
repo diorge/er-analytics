@@ -46,7 +46,7 @@ def get_patch(game_data: typing.Dict[str, typing.Any]) -> typing.Tuple[str, str]
     return (patch_version, hotfix_version)
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(frozen=True)
 class DownloadedGame:
     game_id: GameID
     data: typing.Dict[str, typing.Any]
