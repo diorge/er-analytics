@@ -14,6 +14,13 @@ DEFAULT_RETRY_ATTEMPTS = (0, 1, 2, 5, 10, 30)
 
 
 @dataclasses.dataclass(frozen=True)
+class DownloadedGame:
+    game_id: GameID
+    data: typing.Dict[str, typing.Any]
+    raw: bytes
+
+
+@dataclasses.dataclass(frozen=True)
 class FailedDownloadAttempt:
     game_id: GameID
     attempt_number: int
@@ -40,6 +47,17 @@ def skip_on_error_policy(attempt: FailedDownloadAttempt) -> None:
     )
 
 
+def get_patch(
+    game_data: typing.Dict[str, typing.Any]
+) -> typing.Optional[typing.Tuple[str, str]]:
+    first_player = game_data.get("userGames", [{}])[0]
+    patch_version = first_player.get("versionMajor")
+    hotfix_version = first_player.get("versionMinor")
+    if patch_version is not None and hotfix_version is not None:
+        return (patch_version, hotfix_version)
+    return None
+
+
 @ratelimit.sleep_and_retry
 @ratelimit.limits(calls=CALLS_PER_SECOND, period=1)
 def get_game_data(
@@ -60,24 +78,6 @@ def get_game_data(
     response = requests.get(complete_url, headers=headers)
 
     return response
-
-
-def get_patch(
-    game_data: typing.Dict[str, typing.Any]
-) -> typing.Optional[typing.Tuple[str, str]]:
-    first_player = game_data.get("userGames", [{}])[0]
-    patch_version = first_player.get("versionMajor")
-    hotfix_version = first_player.get("versionMinor")
-    if patch_version is not None and hotfix_version is not None:
-        return (patch_version, hotfix_version)
-    return None
-
-
-@dataclasses.dataclass(frozen=True)
-class DownloadedGame:
-    game_id: GameID
-    data: typing.Dict[str, typing.Any]
-    raw: bytes
 
 
 def download_patch(

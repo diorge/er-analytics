@@ -1,6 +1,6 @@
 import os
-import typing
 import pathlib
+import typing
 
 from loguru import logger
 
