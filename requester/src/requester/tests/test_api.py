@@ -10,16 +10,19 @@ SAMPLE_GAME_ID = dwn.GameID(13594270)
 def test_limit_by_clock() -> None:
     """Attempting multiple calls to download game data within 1 second causes a delay."""
     start = time.time()
-    # make 5 calls
+    CALLS_TO_MAKE = 5
+    EXPECTED_TIME_TO_PASS = (CALLS_TO_MAKE - 1) * dwn.CALLS_PER_SECOND
+
     with requests_mock.Mocker() as m:
         m.get("https://open-api.bser.io/v1/games/0", json={"code": 200})
-        for _ in range(5):
+
+        for _ in range(CALLS_TO_MAKE):
             dwn.get_game_data(dwn.GameID(0))
+
     end = time.time()
 
-    # at least 4 seconds must have passed, plus a small tolerance
-    TOLERANCE = 1.1  # extra 10%
-    assert 4 <= (end - start) * TOLERANCE
+    TOLERANCE = 1.1  # extra 10% because of timer errors
+    assert EXPECTED_TIME_TO_PASS <= (end - start) * TOLERANCE
 
 
 def test_user_games_retrieved() -> None:
