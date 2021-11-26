@@ -104,11 +104,8 @@ def test_download_stops_next_patch(unlimited_download_patch: PatchDownloader) ->
         m.get("https://open-api.bser.io/v1/games/13", json=future_json)
 
         gen = []
-        try:
-            for game in unlimited_download_patch(dwn.GameID(11)):
-                gen.append(game)
-        except dwn.TooManyTriesError:
-            pass
+        for game in unlimited_download_patch(dwn.GameID(11)):
+            gen.append(game)
 
         assert 3 == len(gen)
 
