@@ -9,26 +9,32 @@ import requester.download as dwn
 
 SAMPLE_GAME_ID = dwn.GameID(13594270)
 
-PatchDownloader = typing.Callable[..., typing.Iterable[dwn.DownloadedGame]]
-
 
 @pytest.fixture
-def unlimited_download_patch() -> PatchDownloader:
-    def inner(
-        starting_game_id: dwn.GameID,
-        *,
-        on_error_policy: dwn.OnErrorPolicy = dwn.raise_on_error_policy,
-        is_id_valid: typing.Callable[[dwn.GameID], bool] = (lambda _: True),
-    ) -> typing.Iterable[dwn.DownloadedGame]:
-        return dwn.download_patch(
-            starting_game_id,
-            retry_time_in_seconds=(0,),
-            on_error_policy=on_error_policy,
-            is_id_valid=is_id_valid,
-            downloader=dwn._download_game_unlimited,
-        )
+def unlimited_downloader() -> dwn.PatchDownloader:
+    return dwn.PatchDownloader(
+        retry_time_in_seconds=(0,), downloader=dwn._download_game_unlimited
+    )
 
-    return inner
+
+def count_result_instances(
+    instances: typing.Iterable[dwn.DownloadResult],
+) -> typing.Dict[type, int]:
+    counts = expected_instance_count(0, 0, 0, 0)
+    for inst in instances:
+        counts[type(inst)] += 1
+    return counts
+
+
+def expected_instance_count(
+    downloaded: int = 0, skipped: int = 0, failed: int = 0, mismatch_patch: int = 0
+) -> typing.Dict[type, int]:
+    return {
+        dwn.DownloadedGame: downloaded,
+        dwn.FailedDownloadAttempt: failed,
+        dwn.SkippedDownloadAttempt: skipped,
+        dwn.MismatchedPatchDownloadAttempt: mismatch_patch,
+    }
 
 
 def test_limit_by_clock() -> None:
@@ -67,7 +73,7 @@ def test_api_key_invalid() -> None:
     assert response.status_code == 403
 
 
-def test_download_entire_patch(unlimited_download_patch: PatchDownloader) -> None:
+def test_download_entire_patch(unlimited_downloader: dwn.PatchDownloader) -> None:
     """Is able to download all games of a patch, not touching other patches."""
     fine_json = {"code": 200, "userGames": [{"versionMajor": 45, "versionMinor": 0}]}
     old_json = {"code": 200, "userGames": [{"versionMajor": 44, "versionMinor": 0}]}
@@ -79,19 +85,18 @@ def test_download_entire_patch(unlimited_download_patch: PatchDownloader) -> Non
         m.get("https://open-api.bser.io/v1/games/9", json=old_json)
         m.get("https://open-api.bser.io/v1/games/13", json=fail_json)
 
-        gen = []
-        try:
-            for game in unlimited_download_patch(
-                dwn.GameID(11),
-            ):
-                gen.append(game)
-        except dwn.TooManyTriesError:
-            pass
+        for game in unlimited_downloader.download_patch(dwn.GameID(11)):
+            if isinstance(game, dwn.FailedDownloadAttempt):
+                break
 
-        assert 3 == len(gen)
+        five_games = itertools.islice(
+            unlimited_downloader.download_patch(dwn.GameID(11)), 5
+        )
+        expected = expected_instance_count(downloaded=3, failed=1, mismatch_patch=1)
+        assert expected == count_result_instances(five_games)
 
 
-def test_download_stops_next_patch(unlimited_download_patch: PatchDownloader) -> None:
+def test_download_stops_next_patch(unlimited_downloader: dwn.PatchDownloader) -> None:
     """Downloading the patch stops if the next game is next patch."""
     fine_json = {"code": 200, "userGames": [{"versionMajor": 45, "versionMinor": 0}]}
     old_json = {"code": 200, "userGames": [{"versionMajor": 44, "versionMinor": 0}]}
@@ -103,64 +108,41 @@ def test_download_stops_next_patch(unlimited_download_patch: PatchDownloader) ->
         m.get("https://open-api.bser.io/v1/games/9", json=old_json)
         m.get("https://open-api.bser.io/v1/games/13", json=future_json)
 
-        gen = []
-        for game in unlimited_download_patch(dwn.GameID(11)):
-            gen.append(game)
-
-        assert 3 == len(gen)
-
-
-def test_skip_policy(unlimited_download_patch: PatchDownloader) -> None:
-    """Skip policy will jump over an unretrievable game."""
-    fine_json = {"code": 200, "userGames": [{"versionMajor": 45, "versionMinor": 0}]}
-    old_json = {"code": 200, "userGames": [{"versionMajor": 44, "versionMinor": 0}]}
-    fail_json = {"code": 404}
-    with requests_mock.Mocker() as m:
-        m.get("https://open-api.bser.io/v1/games/9", json=old_json | {"id": 9})
-        m.get("https://open-api.bser.io/v1/games/10", json=fine_json | {"id": 10})
-        m.get("https://open-api.bser.io/v1/games/11", json=fail_json | {"id": 11})
-        m.get("https://open-api.bser.io/v1/games/12", json=fine_json | {"id": 12})
-        m.get("https://open-api.bser.io/v1/games/13", json=fine_json | {"id": 13})
-
-        gen = unlimited_download_patch(
-            dwn.GameID(10),
-            on_error_policy=dwn.skip_on_error_policy,
-        )
-        games = itertools.islice(gen, 3)
-        assert {10, 12, 13} == {g.data["id"] for g in games}
+        games = list(unlimited_downloader.download_patch(dwn.GameID(11)))
+        assert 5 == len(games)
+        expected = expected_instance_count(downloaded=3, mismatch_patch=2)
+        assert expected == count_result_instances(games)
 
 
-def test_filter_download_predicate(unlimited_download_patch: PatchDownloader) -> None:
+def test_filter_download_predicate(unlimited_downloader: dwn.PatchDownloader) -> None:
     """Can filter out certain game IDs."""
     fine_json = {"code": 200, "userGames": [{"versionMajor": 45, "versionMinor": 0}]}
     old_json = {"code": 200, "userGames": [{"versionMajor": 44, "versionMinor": 0}]}
     with requests_mock.Mocker() as m:
-        m.get("https://open-api.bser.io/v1/games/9", json=old_json | {"id": 9})
-        m.get("https://open-api.bser.io/v1/games/10", json=fine_json | {"id": 10})
-        m.get("https://open-api.bser.io/v1/games/11", json=fine_json | {"id": 11})
-        m.get("https://open-api.bser.io/v1/games/12", json=fine_json | {"id": 12})
-        m.get("https://open-api.bser.io/v1/games/13", json=fine_json | {"id": 13})
+        m.get("https://open-api.bser.io/v1/games/9", json=old_json)
+        m.get("https://open-api.bser.io/v1/games/10", json=fine_json)
+        m.get("https://open-api.bser.io/v1/games/11", json=fine_json)
+        m.get("https://open-api.bser.io/v1/games/12", json=fine_json)
+        m.get("https://open-api.bser.io/v1/games/13", json=fine_json)
 
-        gen = unlimited_download_patch(
-            dwn.GameID(10),
-            is_id_valid=(lambda gid: gid != 11),
-        )
-        games = itertools.islice(gen, 3)
-        assert {10, 12, 13} == {g.data["id"] for g in games}
+        unlimited_downloader.game_filter_predicate = lambda gid: gid != 11
+
+        games = itertools.islice(unlimited_downloader.download_patch(dwn.GameID(10)), 5)
+        expected = expected_instance_count(downloaded=3, skipped=1, mismatch_patch=1)
+        assert expected == count_result_instances(games)
 
 
-def test_download_invalid_patch(unlimited_download_patch: PatchDownloader) -> None:
+def test_download_invalid_patch(unlimited_downloader: dwn.PatchDownloader) -> None:
     """Stops at an invalid patch."""
     fine_json = {"code": 200, "userGames": [{"versionMajor": 45, "versionMinor": 0}]}
     invalid_patch = {"code": 200, "userGames": [{}]}
     invalid_userGames = {"code": 200}
     with requests_mock.Mocker() as m:
-        m.get("https://open-api.bser.io/v1/games/9", json=invalid_patch | {"id": 9})
-        m.get("https://open-api.bser.io/v1/games/10", json=fine_json | {"id": 10})
-        m.get(
-            "https://open-api.bser.io/v1/games/11", json=invalid_userGames | {"id": 11}
-        )
+        m.get("https://open-api.bser.io/v1/games/9", json=invalid_patch)
+        m.get("https://open-api.bser.io/v1/games/10", json=fine_json)
+        m.get("https://open-api.bser.io/v1/games/11", json=invalid_userGames)
 
-        gen = unlimited_download_patch(dwn.GameID(10))
+        games = itertools.islice(unlimited_downloader.download_patch(dwn.GameID(10)), 3)
 
-        assert {10} == {g.data["id"] for g in tuple(gen)}
+        expected = expected_instance_count(downloaded=1, mismatch_patch=2)
+        assert expected == count_result_instances(games)

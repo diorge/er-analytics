@@ -86,19 +86,26 @@ def main() -> None:
     else:
         logger.info("Recognized download folder structure")
 
-    game_seq = dwn.download_patch(
-        params.starting_game_id,
+    downloader = dwn.PatchDownloader(
         retry_time_in_seconds=params.profile.retry_timers(),
-        on_error_policy=dwn.skip_on_error_policy,
-        is_id_valid=game_filter(params),
+        game_filter_predicate=game_filter(params),
     )
 
-    for game in game_seq:
+    for game in downloader.download_patch(params.starting_game_id):
         filename, destination = get_filename(params.target_directory, game.game_id)
 
-        with open(destination, "wb") as game_file:
-            game_file.write(game.raw)
-        logger.info(f"Written bytes=<{len(game.raw)}> to filename=<{filename}>")
+        if isinstance(
+            game,
+            (
+                dwn.DownloadedGame,
+                dwn.FailedDownloadAttempt,
+                dwn.MismatchedPatchDownloadAttempt,
+            ),
+        ):
+            with open(destination, "wb") as game_file:
+                raw_bytes = game.response.content
+                game_file.write(raw_bytes)
+            logger.info(f"Written bytes=<{len(raw_bytes)}> to filename=<{filename}>")
 
 
 if __name__ == "__main__":

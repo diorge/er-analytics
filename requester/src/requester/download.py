@@ -8,54 +8,50 @@ import requests
 from loguru import logger
 
 GameID = typing.NewType("GameID", int)
+PatchVersion = typing.NewType("PatchVersion", typing.Tuple[str, str])
 
 CALLS_PER_SECOND = 1
 DEFAULT_RETRY_ATTEMPTS = (0, 1, 2, 5, 10, 30)
 
 
 @dataclasses.dataclass(frozen=True)
-class DownloadedGame:
+class DownloadResult:
     game_id: GameID
-    data: typing.Dict[str, typing.Any]
-    raw: bytes
 
 
 @dataclasses.dataclass(frozen=True)
-class FailedDownloadAttempt:
-    game_id: GameID
+class DownloadedGame(DownloadResult):
+    data: typing.Dict[str, typing.Any]
+    response: requests.Response
+
+
+@dataclasses.dataclass(frozen=True)
+class FailedDownloadAttempt(DownloadResult):
     attempt_number: int
-    last_response: requests.Response
+    response: requests.Response
 
 
-OnErrorPolicy = typing.Callable[[FailedDownloadAttempt], None]
+@dataclasses.dataclass(frozen=True)
+class SkippedDownloadAttempt(DownloadResult):
+    pass
+
+
+@dataclasses.dataclass(frozen=True)
+class MismatchedPatchDownloadAttempt(DownloadResult):
+    game_patch: typing.Optional[PatchVersion]
+    expected_patch: PatchVersion
+    response: requests.Response
+
+
 Downloader = typing.Callable[..., requests.Response]
 
 
-class TooManyTriesError(Exception):
-    def __init__(self, details: FailedDownloadAttempt) -> None:
-        self.details = details
-        super().__init__()
-
-
-def raise_on_error_policy(attempt: FailedDownloadAttempt) -> None:
-    raise TooManyTriesError(attempt)
-
-
-def skip_on_error_policy(attempt: FailedDownloadAttempt) -> None:
-    logger.warning(
-        f"Skipping download of game_id=<{attempt.game_id}>"
-        ", reason=<Skip on error policy>"
-    )
-
-
-def get_patch(
-    game_data: typing.Dict[str, typing.Any]
-) -> typing.Optional[typing.Tuple[str, str]]:
+def get_patch(game_data: typing.Dict[str, typing.Any]) -> typing.Optional[PatchVersion]:
     first_player = game_data.get("userGames", [{}])[0]
     patch_version = first_player.get("versionMajor")
     hotfix_version = first_player.get("versionMinor")
     if patch_version is not None and hotfix_version is not None:
-        return (patch_version, hotfix_version)
+        return PatchVersion((patch_version, hotfix_version))
     return None
 
 
@@ -94,67 +90,91 @@ def _download_game_unlimited(
     return response
 
 
-def download_patch(
-    starting_game_id: GameID,
-    *,
-    retry_time_in_seconds: typing.Tuple[float, ...] = DEFAULT_RETRY_ATTEMPTS,
-    on_error_policy: OnErrorPolicy = raise_on_error_policy,
-    is_id_valid: typing.Callable[[GameID], bool] = (lambda _: True),
-    downloader: Downloader = download_game,
-) -> typing.Iterable[DownloadedGame]:
-    """
-    Downloads game matches from the patch of the given Game ID.
-    Will keep downloading at time intervals upon reaching 404 (or any error),
-    since it should be downloading the most current matches.
-    When moving forward it will also keep patch in mind,
-    not stepping boundaries into the next patch.
-    """
+class PatchDownloader:
+    def __init__(
+        self,
+        *,
+        retry_time_in_seconds: typing.Tuple[float, ...] = DEFAULT_RETRY_ATTEMPTS,
+        game_filter_predicate: typing.Callable[[GameID], bool] = (lambda _: True),
+        downloader: Downloader = download_game,
+    ):
+        self.retry_time_in_seconds = retry_time_in_seconds
+        self.game_filter_predicate = game_filter_predicate
+        self.downloader = downloader
 
-    starting_game = downloader(starting_game_id)
-    yield DownloadedGame(starting_game_id, starting_game.json(), starting_game.content)
+    def download_patch(
+        self, starting_game_id: GameID
+    ) -> typing.Iterable[DownloadResult]:
+        # force download of starting game to get patch
+        starting_game = self._attempt_download(starting_game_id, ignore_skip=True)
 
-    target_patch = get_patch(starting_game.json())
+        if not isinstance(starting_game, DownloadedGame):
+            raise ValueError()
 
-    def download_from(
-        game_id_seq: typing.Iterator[GameID],
-    ) -> typing.Iterable[DownloadedGame]:
-        current_patch = target_patch
+        expected_patch = get_patch(starting_game.data)
+        if expected_patch is None:
+            raise ValueError()
 
-        while current_patch == target_patch:
-            next_id = next(game_id_seq)
+        yield starting_game
 
-            if not is_id_valid(next_id):
-                logger.info(
-                    f"Skipping download of game_id=<{next_id}>"
-                    ", reason=<Predicate filtered>"
-                )
-                continue
+        def yield_seq(
+            game_ids: typing.Iterator[GameID],
+        ) -> typing.Iterable[DownloadResult]:
+            for gid in game_ids:
+                result = self._attempt_download(gid, expected_patch)
+                yield result
+                if isinstance(result, MismatchedPatchDownloadAttempt):
+                    break
 
-            attempt = 0
-            successful = False
-            while not successful and attempt < len(retry_time_in_seconds):
-                time.sleep(retry_time_in_seconds[attempt])
-                next_game = downloader(GameID(next_id))
-                successful = (
-                    next_game.status_code == 200 and next_game.json()["code"] == 200
-                )
+        backwards_ids = map(
+            GameID, itertools.count(start=starting_game_id - 1, step=-1)
+        )
+        forward_ids = map(GameID, itertools.count(start=starting_game_id + 1))
+
+        yield from yield_seq(backwards_ids)
+        yield from yield_seq(forward_ids)
+
+    def _attempt_download(
+        self,
+        game_id: GameID,
+        expected_patch: typing.Optional[PatchVersion] = None,
+        *,
+        ignore_skip: bool = False,
+    ) -> DownloadResult:
+        if not ignore_skip and not self.game_filter_predicate(game_id):
+            logger.info(
+                f"Skipping download of game_id=<{game_id}>"
+                ", reason=<Predicate filtered>"
+            )
+            return SkippedDownloadAttempt(game_id)
+
+        max_attempts = len(self.retry_time_in_seconds)
+        attempt = 0
+        successful = False
+        while not successful and attempt < max_attempts:
+            game_resp = self.downloader(game_id)
+            successful = (
+                game_resp.status_code == 200 and game_resp.json()["code"] == 200
+            )
+            if not successful:
+                time.sleep(self.retry_time_in_seconds[attempt])
                 attempt += 1
 
-            if successful:
-                current_patch = get_patch(next_game.json())
-                if current_patch is None:
-                    logger.warning(f"Unable to retrieve patch for game_id=<{next_id}>")
-                elif current_patch == target_patch:
-                    yield DownloadedGame(next_id, next_game.json(), next_game.content)
-            else:
-                logger.info(
-                    f"Reached maximum attempts=<{attempt}>"
-                    f" for downloading game_id=<{next_id}>"
-                )
-                on_error_policy(FailedDownloadAttempt(next_id, attempt, next_game))
+        if not successful:
+            logger.info(
+                f"Reached maximum attempts=<{attempt}>"
+                f" for downloading game_id=<{game_id}>"
+            )
+            return FailedDownloadAttempt(game_id, attempt, game_resp)
 
-    backwards_ids = map(GameID, itertools.count(start=starting_game_id - 1, step=-1))
-    yield from download_from(backwards_ids)
+        game_data = game_resp.json()
+        game_patch = get_patch(game_data)
+        if game_patch is None:
+            logger.warning(f"Unable to retrieve patch for game_id=<{game_id}>")
 
-    forward_ids = map(GameID, itertools.count(start=starting_game_id + 1))
-    yield from download_from(forward_ids)
+        if expected_patch is not None and expected_patch != game_patch:
+            return MismatchedPatchDownloadAttempt(
+                game_id, game_patch, expected_patch, game_resp
+            )
+
+        return DownloadedGame(game_id, game_data, game_resp)
