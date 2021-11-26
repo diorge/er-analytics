@@ -1,3 +1,4 @@
+import dataclasses
 import os
 import pathlib
 import typing
@@ -6,60 +7,74 @@ from loguru import logger
 
 import requester.download as dwn
 
+DEFAULT_TARGET_DIR = pathlib.Path("data") / "games" / "raw"
+
+
+@dataclasses.dataclass(frozen=True)
+class Parameters:
+    starting_game_id: dwn.GameID
+    overwrite_found_files: bool
+    target_directory: pathlib.Path
+
+
+def parse_env() -> Parameters:
+    FALSY_VALUES = ("", "false", "no", "0")
+
+    starting_game_id_str = os.getenv("STARTING_GAME_ID")
+    if starting_game_id_str is None:
+        raise ValueError("Missing required env var STARTING_GAME_ID")
+    # let the normal ValueError raise, no need to catch
+    starting_game_id = dwn.GameID(int(starting_game_id_str))
+
+    overwrite_found_files_str = os.getenv("OVERWRITE_OLD_DATA", "false")
+    overwrite_found_files = overwrite_found_files_str.lower() not in FALSY_VALUES
+
+    target_dir = pathlib.Path(os.getenv("TARGET_DIRECTORY", DEFAULT_TARGET_DIR))
+
+    return Parameters(starting_game_id, overwrite_found_files, target_dir)
+
+
+def get_filename(
+    target_dir: pathlib.Path, game_id: dwn.GameID
+) -> typing.Tuple[str, pathlib.Path]:
+    filename = f"{game_id}.json"
+    destination = target_dir / filename
+    return (filename, destination)
+
+
+def game_filter(params: Parameters) -> typing.Callable[[dwn.GameID], bool]:
+    if params.overwrite_found_files:
+        return lambda _: True
+
+    def should_download(game_id: dwn.GameID) -> bool:
+        _, path = get_filename(params.target_directory, game_id)
+        return not path.exists()
+
+    return should_download
+
 
 def main() -> None:
     """
     Runs the downloading script and writes the files on disk.
     """
-    starting_game_id = os.getenv("STARTING_GAME_ID")
-    if starting_game_id is None:
-        raise ValueError("Missing env var STARTING_GAME_ID")
+    params = parse_env()
 
-    # let the normal ValueError raise, no need to catch
-    starting_game_id_val = dwn.GameID(int(starting_game_id))
+    logger.debug(f"Parsed opts: {params}")
 
-    overwrite_found_files_str = os.getenv("OVERWRITE_OLD_DATA", "false")
-    overwrite_found_files = overwrite_found_files_str.lower() not in (
-        "",
-        "false",
-        "no",
-        "0",
-    )
-
-    logger.debug(
-        f"Parsed opts: starting_game_id=<{starting_game_id_val}>"
-        f", overwrite_old_data=<{overwrite_found_files}>"
-    )
-
-    base_dir = pathlib.Path("data") / "games" / "raw"
-    if not base_dir.exists():
+    if not params.target_directory.exists():
         logger.info("Creating download folder structure")
-        base_dir.mkdir(parents=True)
+        params.target_directory.mkdir(parents=True)
     else:
         logger.info("Recognized download folder structure")
 
-    def get_filename(game_id: dwn.GameID) -> typing.Tuple[str, pathlib.Path]:
-        filename = f"{game_id}.json"
-        destination = base_dir / filename
-        return (filename, destination)
-
-    def should_download(game_id: dwn.GameID) -> bool:
-        _, path = get_filename(game_id)
-        return not path.exists()
-
-    def always_download(game_id: dwn.GameID) -> bool:
-        return True
-
-    is_id_valid = always_download if overwrite_found_files else should_download
-
     game_seq = dwn.download_patch(
-        starting_game_id_val,
+        params.starting_game_id,
         on_error_policy=dwn.skip_on_error_policy,
-        is_id_valid=is_id_valid,
+        is_id_valid=game_filter(params),
     )
 
     for game in game_seq:
-        filename, destination = get_filename(game.game_id)
+        filename, destination = get_filename(params.target_directory, game.game_id)
 
         with open(destination, "wb") as game_file:
             game_file.write(game.raw)
