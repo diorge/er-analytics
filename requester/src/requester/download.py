@@ -8,7 +8,7 @@ import requests
 from loguru import logger
 
 GameID = typing.NewType("GameID", int)
-PatchVersion = typing.NewType("PatchVersion", typing.Tuple[str, str])
+PatchVersion = typing.NewType("PatchVersion", tuple[str, str])
 
 CALLS_PER_SECOND = 1
 DEFAULT_RETRY_ATTEMPTS = (0, 1, 2, 5, 10, 30)
@@ -21,7 +21,7 @@ class DownloadResult:
 
 @dataclasses.dataclass(frozen=True)
 class DownloadedGame(DownloadResult):
-    data: typing.Dict[str, typing.Any]
+    data: dict[str, typing.Any]
     response: requests.Response
 
 
@@ -46,7 +46,7 @@ class MismatchedPatchDownloadAttempt(DownloadResult):
 Downloader = typing.Callable[..., requests.Response]
 
 
-def get_patch(game_data: typing.Dict[str, typing.Any]) -> typing.Optional[PatchVersion]:
+def get_patch(game_data: dict[str, typing.Any]) -> typing.Optional[PatchVersion]:
     first_player = game_data.get("userGames", [{}])[0]
     patch_version = first_player.get("versionMajor")
     hotfix_version = first_player.get("versionMinor")
@@ -94,7 +94,7 @@ class PatchDownloader:
     def __init__(
         self,
         *,
-        retry_time_in_seconds: typing.Tuple[float, ...] = DEFAULT_RETRY_ATTEMPTS,
+        retry_time_in_seconds: tuple[float, ...] = DEFAULT_RETRY_ATTEMPTS,
         game_filter_predicate: typing.Callable[[GameID], bool] = (lambda _: True),
         downloader: Downloader = download_game,
     ):

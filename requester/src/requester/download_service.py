@@ -15,7 +15,7 @@ class RetryProfile(enum.Enum):
     STANDARD = enum.auto()
     AGGRESSIVE = enum.auto()
 
-    def retry_timers(self) -> typing.Tuple[float, ...]:
+    def retry_timers(self) -> tuple[float, ...]:
         return {
             RetryProfile.STANDARD: dwn.DEFAULT_RETRY_ATTEMPTS,
             RetryProfile.AGGRESSIVE: (1, 2, 5),
@@ -55,7 +55,7 @@ def parse_env() -> Parameters:
 
 def get_filename(
     target_dir: pathlib.Path, game_id: dwn.GameID
-) -> typing.Tuple[str, pathlib.Path]:
+) -> tuple[str, pathlib.Path]:
     filename = f"{game_id}.json"
     destination = target_dir / filename
     return (filename, destination)

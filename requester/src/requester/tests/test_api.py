@@ -19,7 +19,7 @@ def unlimited_downloader() -> dwn.PatchDownloader:
 
 def count_result_instances(
     instances: typing.Iterable[dwn.DownloadResult],
-) -> typing.Dict[type, int]:
+) -> dict[type, int]:
     counts = expected_instance_count(0, 0, 0, 0)
     for inst in instances:
         counts[type(inst)] += 1
@@ -28,7 +28,7 @@ def count_result_instances(
 
 def expected_instance_count(
     downloaded: int = 0, skipped: int = 0, failed: int = 0, mismatch_patch: int = 0
-) -> typing.Dict[type, int]:
+) -> dict[type, int]:
     return {
         dwn.DownloadedGame: downloaded,
         dwn.FailedDownloadAttempt: failed,
